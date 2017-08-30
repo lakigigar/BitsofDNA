@@ -1,2 +1,2 @@
 # blogcode
-Code for reproducing results posted on my blog
+Code for reproducing results posted on the [Bits of DNA](http://liorpachter.wordpress.com) blog.
