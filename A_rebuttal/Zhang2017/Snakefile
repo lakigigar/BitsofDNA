@@ -1,0 +1,102 @@
+PRE = "tp53"
+FASTA = "{0}.fa".format(PRE)
+INDEX = "{0}.idx".format(PRE)
+SALINDEX = 'salmon.'+INDEX
+SALBIN= "~/work/blog/salmon/build/src/salmon"
+#samples = ['sample_' + "%02d"%(x,) for x in range(1,26)]
+samples = ['shuffled_sample_' + "%02d"%(x,) for x in range(1,26)]
+
+rule all:
+    input:
+        expand("out/{s}/abundance.h5", s=samples),
+        expand("out43/{s}/abundance.h5", s=samples),
+        expand("salmon_out/{s}/quant.sf", s=samples),
+        expand("salmon_out_prior/{s}/quant.sf", s=samples)
+        #expand("out/{s}/abundance.h5", s=[samples[0]])
+
+rule simulate_reads:
+    input:
+        FASTA
+    output:
+        #expand("tp53_reads_all/{s}_1.fasta", s=samples),
+        #expand("tp53_reads_all/{s}_2.fasta", s=samples)
+    shell:
+        "R CMD BATCH sim.R"
+
+rule kal_index:
+    input: FASTA
+    output: INDEX
+    shell:
+        "kallisto index -i {output} {input}"
+
+rule sal_index:
+    input: FASTA
+    output: SALINDEX
+    shell:
+        SALBIN + "index -t {FASTA} --index {SALINDEX} --no-version-check"
+
+
+rule kallisto_quant430:
+    input:
+        "tp53_reads_all/{s}_1.fasta",
+        "tp53_reads_all/{s}_2.fasta",
+        INDEX
+    output:
+        "out43/{s}",
+        "out43/{s}/abundance.h5",
+        "out43/{s}/abundance.tsv",
+        "out43/{s}/run_info.json"
+    shell:
+        "bin/kallisto/kallisto quant "
+        "-i {INDEX} "
+        #"-b 30 "
+        "-o {output[0]} "
+	    "--fr-stranded "
+	    #"-l 250 "  ## needed for correct fragment length distribution
+	    #"-s 25 "
+        "{input[0]} {input[1]}"
+
+rule kallisto_quant:
+    input:
+        "tp53_reads_all/{s}_1.fasta",
+        "tp53_reads_all/{s}_2.fasta",
+        INDEX
+    output:
+        "out/{s}",
+        "out/{s}/abundance.h5",
+        "out/{s}/abundance.tsv",
+        "out/{s}/run_info.json"
+    shell:
+        "kallisto quant "
+        "-i {INDEX} "
+        #"-b 30 "
+        "-o {output[0]} "
+	    "--fr-stranded "
+	    "-l 250 "
+	    "-s 25 "
+        "{input[0]} {input[1]}"
+
+
+rule sal_quant:
+    input:
+        "tp53_reads_all/{s}_1.fasta",
+        "tp53_reads_all/{s}_2.fasta",
+        SALINDEX
+    output:
+        "salmon_out/{s}",
+        "salmon_out/{s}/quant.sf"
+    shell:
+        SALBIN + " quant --no-version-check -i {input[2]} -l ISF -1 {input[0]} -2 {input[1]} -o {output[0]} -p 1"
+
+rule sal_quant_prior:
+    input:
+        "tp53_reads_all/{s}_1.fasta",
+        "tp53_reads_all/{s}_2.fasta",
+        SALINDEX
+    output:
+        "salmon_out_prior/{s}",
+        "salmon_out_prior/{s}/quant.sf"
+    shell:
+        SALBIN + " quant --no-version-check -i {input[2]} -l ISF -1 {input[0]} -2 {input[1]} -o {output[0]} --numPreAuxModelSamples 0 --incompatPrior 0 -p 1"
+
+

@@ -1,0 +1,112 @@
+---
+output:
+  html_document:
+    toc: false
+    theme: default
+    fig_height: 10
+    fig_width: 10
+---
+
+Load SRA info
+
+```{r}
+sample_to_condition <- read.table('../metadata/hiseq_info.txt', header = TRUE,
+  sep = ' ')
+sample_to_condition <- dplyr::select(sample_to_condition,
+  sample = run_accession, condition)
+head(sample_to_condition)
+
+```
+
+```{r}
+suppressMessages({
+  library('ggplot2')
+  library('cowplot')
+  library('tximport')
+  library('DESeq2')
+})
+```
+
+Load gene info
+
+```{r cache=TRUE}
+mart <- biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL",
+  dataset = "hsapiens_gene_ensembl",
+  host = "may2015.archive.ensembl.org")
+ttg <- biomaRt::getBM(
+  attributes = c("ensembl_transcript_id", "transcript_version",
+  "ensembl_gene_id", "external_gene_name", "description",
+  "transcript_biotype"),
+  mart = mart)
+ttg <- dplyr::select(ttg, TXNAME = ensembl_transcript_id,
+  GENEID = ensembl_gene_id)
+head(ttg)
+```
+
+## loading data
+
+```{r}
+sample_ids <- dir(file.path('..', 'results'))
+sample_to_condition <- dplyr::mutate(sample_to_condition,
+  kallisto_path = file.path('..', 'results', sample_ids, 'v0.43.1', 'abundance.h5'))
+```
+
+
+# import kallisto
+
+```{r}
+txi_kallisto <- tximport(sample_to_condition$kallisto_path, type = 'kallisto',
+  tx2gene = ttg)
+```
+
+```{r}
+dds_kallisto <- DESeqDataSetFromTximport(txi_kallisto, sample_to_condition, ~condition)
+dds_kallisto <- DESeq(dds_kallisto)
+```
+
+```{r}
+DESeq2_kallisto <- results(dds_kallisto)
+DESeq2_kallisto <- as.data.frame(DESeq2_kallisto)
+DESeq2_kallisto <- dplyr::mutate(DESeq2_kallisto, target_id = rownames(DESeq2_kallisto))
+```
+
+# import salmon
+
+```{r}
+sample_to_condition <- dplyr::mutate(sample_to_condition,
+  salmon_path = file.path('..', 'results', sample_ids,
+    'Salmon-0.8.2_linux_x86_64', 'out_gc', 'quant.sf'))
+```
+
+```{r}
+txi_salmon <- tximport(sample_to_condition$salmon_path, type = 'salmon',
+  tx2gene = ttg, dropInfReps = TRUE)
+```
+
+```{r}
+dds_salmon <- DESeqDataSetFromTximport(txi_salmon, sample_to_condition, ~condition)
+dds_salmon <- DESeq(dds_salmon)
+```
+
+```{r}
+DESeq2_salmon <- results(dds_salmon)
+DESeq2_salmon <- as.data.frame(DESeq2_salmon)
+DESeq2_salmon <- dplyr::mutate(DESeq2_salmon, target_id = rownames(DESeq2_salmon))
+```
+
+```{r}
+alpha <- 0.05
+significant_kallisto <- dplyr::filter(DESeq2_kallisto, padj < alpha)
+significant_salmon <- dplyr::filter(DESeq2_salmon, padj < alpha)
+```
+
+
+```{r}
+length(intersect(significant_kallisto$target_id, significant_salmon$target_id))
+length(setdiff(significant_kallisto$target_id, significant_salmon$target_id))
+length(setdiff(significant_salmon$target_id, significant_kallisto$target_id))
+```
+
+```{r}
+sessionInfo()
+```

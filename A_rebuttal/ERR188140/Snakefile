@@ -1,0 +1,369 @@
+BASE =  '..'
+BIN = BASE + '/bin'
+OLDSOFT = BASE + '/software'
+SAILFISH_NEW = OLDSOFT + 'bin/sailfish_0.9.2'
+SAILFISH_OLD = OLDSOFT + 'bin/sailfish_0.6.3'
+RUN_SAILFISH_OLD = 'LD_LIBRARY_PATH=' + OLDSOFT + '/lib/  ' + SAILFISH_OLD
+TRANSCRIPTOME_NAME = 'Homo_sapiens.GRCh38.80'
+TRANSCRIPTOME_FA = BASE + '/ref/' + TRANSCRIPTOME_NAME + '.fa'
+TRANSCRIPTOME_GTF = BASE + '/ref/' + TRANSCRIPTOME_NAME + '.gtf'
+SAILFISH_INDEX_NEW = BASE + '/index/' + TRANSCRIPTOME_NAME + '.sailfish_new'
+SAILFISH_INDEX_OLD = BASE + '/index/' + TRANSCRIPTOME_NAME + '.sailfish_old'
+
+R1='NA12716_7_1.fastq.gz'
+R2='NA12716_7_2.fastq.gz'
+
+kalver = "v0.42  v0.42.1  v0.42.2  v0.42.2.1  v0.42.3  v0.42.4  v0.42.5  v0.43.0  v0.43.1".split()
+salmver = "Salmon-0.7.1_linux_x86_64 Salmon-0.7.2_linux_x86_64 Salmon-0.8.0_linux_x86_64 Salmon-0.8.1_linux_x86_64 Salmon-0.8.2_linux_x86_64 SalmonBeta-0.3.2_DebianSqueeze SalmonBeta-0.4.0_DebianSqueeze SalmonBeta-0.4.1_DebianSqueeze SalmonBeta-0.4.2_DebianSqueeze SalmonBeta-0.6.1_DebianSqueeze SalmonBeta-0.7.0_linux_x86_64".split()
+salm50 = "SalmonBeta-0.5.0_DebianSqueeze SalmonBeta-0.5.1_DebianSqueeze".split()
+sailb = "SailfishBeta-0.10.0_CentOS5 SailfishBeta-0.7.0_Linux-x86-64 SailfishBeta-0.7.2_Linux-x86-64 SailfishBeta-0.7.3_Linux-x86-64 SailfishBeta-0.7.5_Linux-x86-64 SailfishBeta-0.7.6_Linux-x86-64 SailfishBeta-0.7.7_DebianSqueeze SailfishBeta-0.8.0_DebianSqueeze SailfishBeta-0.9.0_DebianSqueeze SailfishBeta-0.9.1_CentOS5 SailfishBeta-0.9.2_CentOS5".split()
+
+rule all:
+    input:
+        'results/tables/salm_gc__Salmon-0.8.2_linux_x86_64.txt', 
+        'results/tables/joint.txt',
+        'results/tables/tpm.txt'
+        
+
+rule sailfish_ver_index:
+    input:
+        TRANSCRIPTOME_FA
+    output:
+        'results/sailfishbeta_{version}/ensembl80_{version}.idx'
+    shell:
+        BIN + '/{wildcards.version}/bin/sailfish index'
+        ' -t {input[0]}'
+        ' -o {output[0]}'
+        ' -p 4'
+
+
+rule sailfish_new_index:
+    input:
+        TRANSCRIPTOME_FA
+    output:
+        SAILFISH_INDEX_NEW
+    shell:
+        '{SAILFISH_NEW} index'
+        ' -t {input}'
+        ' -o {output}'
+
+rule sailfish_old_index:
+    input:
+        TRANSCRIPTOME_FA
+    output:
+        SAILFISH_INDEX_OLD
+    shell:
+        '{RUN_SAILFISH_OLD} index'
+        ' -t {input}'
+        ' -k 31'
+        ' -o {output}'
+
+rule sailfish_old:
+    input:
+        R1,
+    	R2,
+        SAILFISH_INDEX_OLD
+    output:
+        'results/sailfish_old/',
+	'results/sailfish_old/quant.sf'
+    benchmark:
+        'benchmark/sailfish_old/benchmark.json'
+    threads: 5
+    shell:
+        '{RUN_SAILFISH_OLD} quant'
+        ' -i {SAILFISH_INDEX_OLD}'
+        ' -o {output[0]}'
+        ' -p {threads}'
+        ' -l "T=PE:S=U"'
+        ' -1 <(zcat {input[0]})'
+        ' -2 <(zcat {input[1]})'
+
+rule sailfish_ver_quant:
+    input:
+        R1,
+        R2,
+        'results/sailfishbeta_{version}/ensembl80_{version}.idx'
+    output:
+        'results/sailfishbeta_{version}/sailout/',
+        'results/sailfishbeta_{version}/sailout/quant.sf'
+    threads: 4
+    shell:
+        BIN+'/{wildcards.version}/bin/sailfish quant '
+        ' -i {input[2]}'
+        ' -o {output[0]}'
+        ' -l IU'
+        ' -p {threads}'
+        ' -1 <(zcat {input[0]})'
+        ' -2 <(zcat {input[1]})'
+ 
+
+rule sailfish_new:
+    input:
+        R1,
+        R2,
+        SAILFISH_INDEX_NEW
+    output:
+        'results/sailfish_new',
+        'results/sailfish_new/quant.sf'
+    benchmark:
+        'benchmark/sailfish_new/benchmark.json'
+    threads: 5
+    shell:
+        '{SAILFISH_NEW} quant'
+        ' -i {SAILFISH_INDEX_NEW}'
+        ' -o {output[0]}'
+        ' -p {threads}'
+        ' -l IU'
+        ' -1 <(zcat {input[0]})'
+        ' -2 <(zcat {input[1]})'
+
+
+rule kallisto_index:
+    input:
+        TRANSCRIPTOME_FA
+    output:
+        'results/{version}/ensembl80_{version}.kidx'
+    shell:
+        BIN+'/kallisto/build/{wildcards.version}/src/kallisto index'
+        ' -i {output[0]}'
+        ' -k 31 {input[0]}'
+       
+rule kallisto_quant:
+    input:
+        'results/{version}/ensembl80_{version}.kidx'
+    output:
+        'results/{version}/',
+        'results/{version}/abundance.h5'
+    shell:
+        BIN+'/kallisto/build/{wildcards.version}/src/kallisto quant'
+        ' -i {input[0]}'
+        ' -o {output[0]} ' + R1 + ' ' + R2
+
+rule salmon_index:
+    input:
+        TRANSCRIPTOME_FA
+    output:
+        'results/{version}/ensembl80_{version}.idx'
+    shell:
+        BIN + '/{wildcards.version}/bin/salmon index '
+        ' -i {output[0]}'
+        ' -t {input[0]}'
+
+rule salmon_index5:
+    input:
+        TRANSCRIPTOME_FA
+    output:
+        'results/{version}/ensembl80_{version}__{type}.idx'
+    shell:
+        BIN + '/{wildcards.version}/bin/salmon index '
+        ' -i {output[0]}'
+        ' -t {input[0]}'
+        ' --type {wildcards.type}'
+
+
+rule salmon_quant:
+    input:
+        R1,
+        R2,
+        'results/{version}/ensembl80_{version}.idx'
+    output:
+        'results/{version}/out',
+        'results/{version}/out/quant.sf'
+    shell:
+        BIN + '/{wildcards.version}/bin/salmon quant '
+        ' -i {input[2]}'
+        ' -o {output[0]}'
+        ' --libType IU '
+        ' -p 1'
+        ' -1 <(zcat {input[0]}) '
+        ' -2 <(zcat {input[1]}) '
+
+
+rule salmon_quant_gc:
+    input:
+        R1,
+        R2,
+        'results/{version}/ensembl80_{version}.idx'
+    output:
+        'results/{version}/out_gc',
+        'results/{version}/out_gc/quant.sf'
+    shell:
+        BIN + '/{wildcards.version}/bin/salmon quant '
+        ' -i {input[2]}'
+        ' -o {output[0]}'
+        ' --libType IU '
+        ' --gcBias '
+        ' -p 12'
+        ' -1 <(zcat {input[0]}) '
+        ' -2 <(zcat {input[1]}) '
+
+rule salmon_quant5:
+    input:
+        R1,
+        R2,
+        'results/{version}/ensembl80_{version}__{type}.idx'
+    output:
+        'results/{version}/out_{type}',
+        'results/{version}/out_{type}/quant.sf'
+    shell:
+        BIN + '/{wildcards.version}/bin/salmon quant '
+        ' -i {input[2]}'
+        ' -o {output[0]}'
+        ' --libType IU '
+        ' -p 1 '
+        ' -1 <(zcat {input[0]}) '
+        ' -2 <(zcat {input[1]}) '
+
+rule fix_kal42:
+    input:
+        'results/v0.42/abundance.txt'
+    output:
+        'results/v0.42/abundance.tsv'
+    shell:
+        'cp {input[0]} {output[0]}'
+
+rule fix_kal421:
+    input:
+        'results/v0.42.1/abundance.txt'
+    output:
+        'results/v0.42.1/abundance.tsv'
+    shell:
+        'cp {input[0]} {output[0]}'
+
+rule kal_txt:
+    input:
+        'results/{version}/abundance.tsv'
+    output:
+        'results/tables/kal_{version}.txt'
+    shell:
+        'grep ENST {input[0]} | cut -f 1,4 | sort > {output[0]}'
+
+rule sail_txt_old:
+    input:
+        'results/sailfish_old/quant.sf'
+    output:
+        'results/tables/sail_0.6.3.txt'
+    shell:
+        'grep ENST {input[0]} | cut -f 1,7 | sort > {output[0]}'
+ 
+rule sail_txt_new:
+    input:
+        'results/sailfish_new/quant.sf'
+    output:
+        'results/tables/sail_0.9.2.txt'
+    shell:
+        'grep ENST {input[0]} | cut -f 1,5 | sort > {output[0]}'
+
+rule sail_txt_ver:
+    input:
+        'results/sailfishbeta_{version}/sailout/quant.sf'
+    output:
+        'results/tables/sailb_{version}.txt'
+    shell:
+        "grep ENST {input[0]} | awk '{{print $1,$NF}}' | sort > {output[0]}"
+
+
+rule salm_txt:
+    input:
+        'results/{version}/out/quant.sf'
+    output:
+        'results/tables/salm_{version}.txt'
+    shell:
+        "grep ENST {input[0]} | awk '{{print $1,$NF}}' | sort > {output[0]}"
+
+rule salm_gc:
+    input:
+        'results/{version}/out_gc/quant.sf'
+    output:
+        'results/tables/salm_{gc}__{version}.txt'
+    shell:
+        'grep ENST {input[0]} | cut -f 1,5 | sort > {output[0]}'
+
+
+rule salm50_txt:
+    input:
+        'results/{version}/out_{type}/quant.sf'
+    output:
+        'results/tables/salm_{version}__{type}.txt'
+    shell:
+        'grep ENST {input[0]} | cut -f 1,4 | sort > {output[0]}'
+
+rule rsem_txt:
+    input:
+        'out.isoforms.results'
+    output:
+        'results/tables/rsem.txt'
+    shell:
+        'grep ENST {input[0]} | cut -f 1,5 | sort > {output[0]}'
+
+rule join_txt:
+    input:
+        expand('results/tables/kal_{version}.txt', version=kalver),
+        expand('results/tables/salm_{version}.txt', version=salmver),
+        expand('results/tables/salm_{version}__{type}.txt', version=salm50, type=['quasi', 'fmd']),
+        'results/tables/salm_gc__Salmon-0.8.2_linux_x86_64.txt',
+        'results/tables/sail_0.6.3.txt',
+        expand('results/tables/sailb_{version}.txt', version=sailb),
+        'results/tables/rsem.txt'
+    output:
+        'results/tables/joint.txt'
+    run:
+        import sys
+
+        header = ['transcript']
+        transcripts =[]
+        data = []
+        for fn in input:
+            print(fn)
+            with open(fn) as f:
+                fn = fn[fn.rfind('/')+1:]
+                print(fn)
+                l = [x.split() for x in f]
+                if len(transcripts) == 0:
+                    transcripts = [x[0] for x in l]
+                data.append([x[1] for x in l])
+                if fn.startswith('kal'):
+                    header.append(fn[:-4])
+                elif fn.startswith('sail'):
+                    header.append(fn[:-4])
+                elif fn.startswith('rsem'):
+                    header.append('rsem')
+                elif fn.find('Salmon') != -1:
+                    name = 'salm_' + fn[fn.find('-')+1:fn.find('_',fn.find('-'))]
+                    print(name)
+                    if fn.find('fmd') != -1:
+                        name += '_fmd'
+                    elif fn.find('quasi') != -1:
+                        name += '_quasi'
+                    elif fn.find('gc') != -1:
+                        name += '_gc'
+                    header.append(name)
+
+        n = len(transcripts)
+        with open(output[0], 'w') as of:
+            of.write('\t'.join(header) + '\n')
+            for i in range(n):
+                of.write(transcripts[i] + '\t')
+                of.write('\t'.join(data[j][i] for j in range(len(data))))
+                of.write('\n')
+
+rule tpm:
+    input:
+        'results/v0.43.1/abundance.tsv',
+        'results/Salmon-0.8.2_linux_x86_64/out/quant.sf',
+        'results/Salmon-0.8.2_linux_x86_64/out_gc/quant.sf'
+    output:
+        'results/tables/tpm.txt'
+    shell:
+        """
+echo -e 'transcript\tkal_4.3.1\tsalm_0.8.2\tsalm_0.8.2_gc' > {output[0]}
+join <(join <(cut -f 1,5 {input[0]} | grep ENST | sort) <(cut -f 1,4 {input[1]} | grep ENST | sort) ) <(cut -f 1,4 {input[2]} | grep ENST | sort) >> {output[0]}
+"""
+
+
+ruleorder: sailfish_ver_index > salmon_index
+ruleorder: sailfish_ver_quant > salmon_quant
+ruleorder: salm_gc > salm50_txt
+ruleorder: salm_gc > salm_txt  
+ruleorder: salmon_quant_gc > salmon_quant5
+ruleorder: salm50_txt > salm_txt 
