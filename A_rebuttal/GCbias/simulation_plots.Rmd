@@ -1,0 +1,209 @@
+<!-- Derived from code released with Patro et al. "Salmon provides fast and bias-aware quantification of transcript expression." -->
+<!-- build with: library(knitr); knit2html("simulate_plot.Rmd") -->
+
+Load all the relevant libraries:
+```{r message=FALSE, warning=FALSE}
+load("simulate.rda")
+library(tximport)
+library(readr)
+library(Biostrings)
+library(dplyr)
+library(limma)
+library(DESeq2)
+library(ggplot2)
+```
+
+Define some helper functions and set the random seed for reproducibility's sake:
+```{r}
+set.seed(1729)
+
+# Define a function for calculating sensitivity vs precision curves.
+sensPrecCurves <- function(test_results, gold.de){
+  df <- data.frame()
+  for (n in names(test_results)) {
+    ordered_gold <- gold.de[order(test_results[[n]]$pvalues)] != 0
+    df <- rbind(df, data.frame(meth=n,
+                               sens=cumsum(ordered_gold)/sum(ordered_gold),
+                               fdr=cumsum(1 - ordered_gold)/seq_along(ordered_gold)))
+  }
+  return(df)
+}
+
+
+sub_txi <- function(txi, keep){
+  return(list(abundance=txi$abundance[,keep], counts=txi$counts[,keep], length=txi$length[,keep], countsFromAbundance=txi$countsFromAbundance))
+}
+
+
+filter_curve <- function(curve_df, x, y, thresh=0.005){
+  keep <- rep(FALSE, nrow(curve_df))
+  keep[1] <- TRUE
+  last_x <- curve_df[1, x]
+  last_y <- curve_df[1, y]
+  for(i in seq_along(keep)){
+    if((abs((curve_df[i, x] - last_x)/(last_x + 10^-10)) > thresh) ||
+       (abs((curve_df[i, y] - last_y)/(last_y + 10^-10)) > thresh)){
+      last_x = curve_df[i, x]
+      last_y = curve_df[i, y]
+      keep[i] <- TRUE
+    }
+  }
+  return(curve_df[keep,])
+}
+
+
+deseq2tests <- function(x, condition, u) {
+  dds <- DESeqDataSetFromTximport(x, data.frame(condition), ~condition)
+  dds <- estimateSizeFactors(dds)
+  keep <- rowSums(counts(dds, normalized=TRUE) >= 10) >= 3
+  dds <- dds[keep,]
+  dds <- DESeq(dds, fitType="local", minRep=Inf)
+  res <- results(dds)
+  df <- data.frame(dm=numeric(nrow(x$counts)), pvalues=rep(1,nrow(x$counts)))
+  df$dm[keep] <- res$log2FoldChange
+  df$pvalues[keep] <- res$pvalue
+  df
+}
+
+# this function uses limma's lmFit for speed
+# it performs simple t-tests, not moderated t-statistics / ebayes methods
+ttests <- function(x, design, pc=1, coef=ncol(design)) {
+  # correct for global shift across condition due to different library size
+  sf <- exp(median(log(rowSums(x[,design[,"condition2"] == 0]) / rowSums(x[,design[,"condition2"] == 1])), na.rm=TRUE))
+  x[,(n+1):(2*n)] <- sf * x[,(n+1):(2*n)]
+  fit <- lmFit(log2(x + pc), design)
+  ordinary.t <- fit$coef / fit$stdev.unscaled / fit$sigma
+  pvals <- 2*pt(abs(ordinary.t[,coef]), df=ncol(x)-ncol(design), lower.tail=FALSE)
+  data.frame(dm=fit$coef[,coef], pvalues=pvals)
+}
+```
+
+Import all the quantifications:
+```{r}
+fasta <- "reference.fa"
+txseq <- readDNAStringSet(fasta)
+
+# Import quantifications
+max_rep <- 8 # samples per group
+
+confs <- c("yes", "no")
+units <- c("abundance", "counts")
+tests <- c("t-test", "DESeq2")
+meths <- c("Salmon", "kallisto")
+
+sim_dirs <- c("yes"="out", "no"="nc_out")
+dir.type <- c(Salmon="salmon", "Salmon (a)"="salmon_align", kallisto="kallisto")
+file.type <- c(Salmon="quant.sf", "Salmon (a)"="quant.sf", kallisto="abundance.tsv")
+type <- c(Salmon="salmon", "Salmon (a)"="salmon", kallisto="kallisto")
+
+txis <- list("yes"=list(), "no"=list())
+
+for(c in confs){
+  dirs <- paste0(sim_dirs[c], "/out_", rep(1:max_rep,2), "/sample_0", rep(1:2,each=max_rep))
+  for (m in meths) {
+    txis[[c]][[m]] <- tximport(file.path(dirs,dir.type[m],file.type[m]),
+                               type=type[m],
+                               txOut=TRUE,
+                               dropInfReps=TRUE)
+  }
+}
+```
+
+Load the true fold changes:
+```{r}
+gold.de <- numeric(length(txseq))
+names(gold.de) <- names(txseq)
+gold.de[rownames(fold_changes)] <- log2(fold_changes[,2])
+```
+
+
+Get curves/test results for all the various scenarios:
+```{r message=FALSE}
+n_samp <- c(3, 8)
+n_rep <- c(30, 1)
+
+empty_test_list <- list("t-test"=list(), "DESeq2"=list())
+empty_conf_list <- list("yes"=empty_test_list, "no"=empty_test_list)
+empty_unit_list <- list("counts"=empty_conf_list, "abundance"=empty_conf_list)
+
+av_sp_curves <- list()
+all_sp_curves <- list()
+test_lists <- list()
+for(n in seq_along(n_samp)){
+  cur_samp <- n_samp[n]
+  condition <- factor(rep(1:2, each=cur_samp))
+  design <- model.matrix(~ condition)
+
+  av_sp_curves[[cur_samp]] <- empty_unit_list
+  all_sp_curves[[cur_samp]] <- list()
+  test_lists[[cur_samp]] <- list()
+
+  for(i in 1:n_rep[n]){
+    all_sp_curves[[cur_samp]][[i]] <- empty_unit_list
+    test_lists[[cur_samp]][[i]] <- empty_unit_list
+
+    samp1 <- sample(1:max_rep, cur_samp)
+    samp2 <- sample((max_rep + 1):(2*max_rep), cur_samp)
+    sub_txis <- list("yes"=list(), "no"=list())
+    for(c in confs){
+      for(m in meths){
+        sub_txis[[c]][[m]] <- sub_txi(txis[[c]][[m]], c(samp1, samp2))
+      }
+    }
+    for(c in confs){
+      for(u in units){
+        for(t in c("t-test", "DESeq2")){
+          cat(sprintf("n = %d, i = %d, c = %s, u = %s, t = %s\n", n, i, c, u, t), file=stderr())
+          for (m in c(meths)) {
+            if(t == "t-test"){
+              test_lists[[cur_samp]][[i]][[u]][[c]][[t]][[m]] <- ttests(sub_txis[[c]][[m]][[u]], design)
+            } else {
+              test_lists[[cur_samp]][[i]][[u]][[c]][[t]][[m]] <- deseq2tests(sub_txis[[c]][[m]], condition, u)
+            }
+          }
+          all_sp_curves[[cur_samp]][[i]][[u]][[c]][[t]] <- sensPrecCurves(test_lists[[cur_samp]][[i]][[u]][[c]][[t]], gold.de)
+          if(length(av_sp_curves[[cur_samp]][[u]][[c]][[t]]) == 0){
+            av_sp_curves[[cur_samp]][[u]][[c]][[t]] <- all_sp_curves[[cur_samp]][[i]][[u]][[c]][[t]]
+            av_sp_curves[[cur_samp]][[u]][[c]][[t]]$sens <- all_sp_curves[[cur_samp]][[i]][[u]][[c]][[t]]$sens/n_rep[n]
+            av_sp_curves[[cur_samp]][[u]][[c]][[t]]$fdr <- all_sp_curves[[cur_samp]][[i]][[u]][[c]][[t]]$fdr/n_rep[n]
+          } else {
+            av_sp_curves[[cur_samp]][[u]][[c]][[t]]$sens <- av_sp_curves[[cur_samp]][[u]][[c]][[t]]$sens + all_sp_curves[[cur_samp]][[i]][[u]][[c]][[t]]$sens/n_rep[n]
+            av_sp_curves[[cur_samp]][[u]][[c]][[t]]$fdr <- av_sp_curves[[cur_samp]][[u]][[c]][[t]]$fdr + all_sp_curves[[cur_samp]][[i]][[u]][[c]][[t]]$fdr/n_rep[n]
+          }
+        }
+      }
+    }
+  }
+}
+
+filt_av_sp_curves <- list()
+for(n in seq_along(n_samp)){
+  filt_av_sp_curves[[n_samp[n]]] <- empty_unit_list
+  for(c in confs){
+    for(u in units){
+      for(t in c("t-test", "DESeq2")){
+        filt_av_sp_curves[[n_samp[n]]][[u]][[c]][[t]] <- filter_curve(av_sp_curves[[n_samp[n]]][[u]][[c]][[t]], "fdr", "sens")
+      }
+    }
+  }
+}
+```
+
+Make some plots:
+```{r}
+# Comparison of DESeq2 and t-test when looking at 3x3 experiments
+df <- rbind(filt_av_sp_curves[[3]][["counts"]][["no"]][["DESeq2"]] %>% filter(meth=="Salmon") %>% mutate(meth="Salmon (DESeq2)"),
+            filt_av_sp_curves[[3]][["abundance"]][["no"]][["t-test"]] %>% filter(meth=="Salmon") %>% mutate(meth="Salmon (t-test)"))
+ggplot(df, aes(x=fdr, y=sens, color=meth)) + geom_path() + ggtitle("DESeq2 vs. t-test (3x3 transcript counts)") + xlim(0, 1)
+
+# kallisto vs. Salmon: 3x3 DESeq2
+ggplot(filt_av_sp_curves[[3]][["counts"]][["no"]][["DESeq2"]], aes(x=fdr, y=sens, color=meth)) + geom_path() + ggtitle("kallisto vs. Salmon (3x3 transcript counts, DESeq2)") + xlim(0, 1)
+
+# kallisto vs. Salmon: 8x8 DESeq2
+ggplot(filt_av_sp_curves[[8]][["counts"]][["no"]][["DESeq2"]], aes(x=fdr, y=sens, color=meth)) + geom_path() + ggtitle("kallisto vs. Salmon (8x8 transcript counts, DESeq2)") + xlim(0, 1)
+
+# confounded vs. non-confounded: 8x8
+df <- rbind(filt_av_sp_curves[[8]][["counts"]][["yes"]][["DESeq2"]] %>% filter(meth=="Salmon") %>% mutate(meth="Salmon (confounded)"),
+            filt_av_sp_curves[[8]][["counts"]][["no"]][["DESeq2"]] %>% filter(meth=="Salmon") %>% mutate(meth="Salmon (non-confounded)"))
+ggplot(df, aes(x=fdr, y=sens, color=meth)) + geom_path() + ggtitle("Confounded vs. non-confounded experiments (8x8 transcript counts, DESeq2)") + xlim(0, 1)
+```
