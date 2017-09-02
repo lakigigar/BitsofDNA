@@ -7,7 +7,7 @@
 df <- read.table("joint.txt",header=TRUE)
 av <- 0.5*log2(df[,10]+1)+0.5*log2(df[,26]+1)
 fc <- log2(df[,10]+1)-log2(df[,26]+1)
-dat <- data.frame(g,h)
+dat <- data.frame(av,fc)
 frac <- length(fc[abs(fc<1) & av!=0])/length(av[av !=0])
 
 # In the command below alpha (from 0 to 1) sets the transparency
